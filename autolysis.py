@@ -10,6 +10,7 @@ Original file is located at
 ## This script does generic analysis which includes summarization, cluster analysis, Correlation analysis,
 ## outlier analysis along with Visulization using python of any csv files and results of this analysis is shared with LLM Model
 ## to come up with a story and the results are stored a README.md file
+pip install matplotlib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
