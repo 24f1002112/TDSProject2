@@ -10,12 +10,15 @@ Original file is located at
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "python-dotenv",
-#     "httpx",
-#     "pandas",
-#     "platformdirs",
-#     "rich",
+#     "chardet",
 #     "matplotlib",
+#     "pandas",
+#     "statsmodels",
+#     "scikit-learn",
+#     "missingno",
+#     "python-dotenv",
+#     "requests",
+#     "seaborn",
 # ]
 # ///
 
@@ -40,27 +43,33 @@ import chardet
 
 # Set the AIPROXY_TOKEN environment variable if not already set
 if "AIPROXY_TOKEN" not in os.environ:
-    # Prompt the user to input their API key if not set in Environment variable
     api_key = input("Please enter your OpenAI API key: ")
     os.environ["AIPROXY_TOKEN"] = api_key
 
-# Set up the API proxy token
 api_key = os.environ["AIPROXY_TOKEN"]
 
-
-# Function to load and clean the dataset
+# Function to detect file encoding
 def detect_encoding(filename):
     with open(filename, 'rb') as f:
         result = chardet.detect(f.read())
-        #print(result)
-        return result['encoding']
+    return result['encoding']
 
-
+# Function to load and clean the dataset
 def load_and_clean_data(filename):
     encoding = detect_encoding(filename)
     df = pd.read_csv(filename, encoding=encoding)
-    df.dropna(axis=0, how='all', inplace=True)  # Drop rows with all NaN values
-    df.fillna(df.mean(), inplace=True)  # Replace missing values with column mean
+    
+    # Drop rows with all NaN values
+    df.dropna(axis=0, how='all', inplace=True)
+    
+    # Fill missing values in numeric columns with the mean of the column
+    numeric_columns = df.select_dtypes(include='number')
+    df[numeric_columns.columns] = numeric_columns.fillna(numeric_columns.mean())
+    
+    # Handle missing values in non-numeric columns (e.g., fill with 'Unknown')
+    non_numeric_columns = df.select_dtypes(exclude='number')
+    df[non_numeric_columns.columns] = non_numeric_columns.fillna('Unknown')
+    
     return df
 
 # Function to summarize the dataset
@@ -76,16 +85,18 @@ def summarize_data(df):
 
 # Outlier detection function using Z-Score
 def detect_outliers(df):
-    z_scores = np.abs(stats.zscore(df.select_dtypes(include=[np.number])))
+    numeric_df = df.select_dtypes(include=[np.number])
+    z_scores = np.abs(stats.zscore(numeric_df))
     outliers = (z_scores > 3).sum(axis=0)
     outlier_info = {
-        column: int(count) for column, count in zip(df.select_dtypes(include=[np.number]).columns, outliers)
+        column: int(count) for column, count in zip(numeric_df.columns, outliers)
     }
     return outlier_info
 
 # Correlation analysis function
 def correlation_analysis(df):
-    correlation_matrix = df.corr()
+    numeric_df = df.select_dtypes(include='number')
+    correlation_matrix = numeric_df.corr()
     return correlation_matrix.to_dict()
 
 # Cluster analysis using KMeans
@@ -107,31 +118,45 @@ def perform_pca(df):
     return df
 
 # Function to create visualizations
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Function to create visualizations
 def create_visualizations(df):
     # Visualization for missing data
+    import missingno as msno
     msno.matrix(df)
-    plt.tight_layout()
+    plt.tight_layout()  # Adjust layout
     missing_img = 'missing_data.png'
     plt.savefig(missing_img)
     plt.close()
 
-    # Correlation heatmap
-    plt.figure(figsize=(10, 6))
-    sns.heatmap(df.corr(), annot=True, cmap='coolwarm', fmt='.2f')
-    plt.title("Correlation Matrix")
-    correlation_img = 'correlation_matrix.png'
-    plt.savefig(correlation_img)
-    plt.close()
+    # Filter numeric columns for correlation heatmap
+    numeric_df = df.select_dtypes(include='number')
+    
+    if numeric_df.shape[1] > 1:  # Ensure there are more than one numeric column for correlation
+        # Correlation heatmap
+        plt.figure(figsize=(10, 6))
+        sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm', fmt='.2f')
+        plt.title("Correlation Matrix")
+        correlation_img = 'correlation_matrix.png'
+        plt.tight_layout()  # Adjust layout to prevent warnings
+        plt.savefig(correlation_img)
+        plt.close()
+    else:
+        correlation_img = None  # If no numeric columns, set as None
 
-    # Cluster visualization
+    # Cluster visualization (after performing PCA)
     plt.figure(figsize=(8, 6))
     sns.scatterplot(x='PCA1', y='PCA2', hue='Cluster', data=df, palette='Set1')
     plt.title("Cluster Analysis (PCA)")
     cluster_img = 'cluster_analysis.png'
+    plt.tight_layout()  # Adjust layout to prevent warnings
     plt.savefig(cluster_img)
     plt.close()
 
-    return [missing_img, correlation_img, cluster_img]
+    return [missing_img, correlation_img, cluster_img] if correlation_img else [missing_img, cluster_img]
+
 
 # Function to generate GPT-4o-Mini analysis story
 def generate_analysis_story(summary, outliers, correlation_matrix):
@@ -153,19 +178,24 @@ def generate_analysis_story(summary, outliers, correlation_matrix):
     """
 
     # Call OpenAI API (GPT-4 or GPT-4o-Mini) to generate the story
-    response = requests.post(
-        "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": prompt},
-
-            ]
-        }
-    )
-    result = response.json()
-    story = result["choices"][0]["message"]["content"]
+    try:
+        response = requests.post(
+            "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": prompt},
+                ]
+            }
+        )
+        response.raise_for_status()  # Check for request errors
+        result = response.json()
+        story = result["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        print(f"Error generating analysis story: {e}")
+        return "Error generating analysis story"
+    
     return story
 
 # Function to write the README with analysis story and results
